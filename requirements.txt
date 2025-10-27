@@ -1,0 +1,14 @@
+
+scikit-learn
+fastapi
+uvicorn
+ultralytics
+joblib 
+numpy 
+pillow
+opencv-python
+pydantic  
+streamlit
+requests
+python-multipart  
+opencv-python-headless  
