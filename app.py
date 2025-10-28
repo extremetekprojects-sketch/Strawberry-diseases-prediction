@@ -556,28 +556,277 @@ if page == "Sensor Prediction":
     st.markdown("Enter sensor data to predict plant health.")
 
     with st.expander("Environmental Parameters", expanded=True):
+#         c1, c2 = st.columns(2)
+#         with c1:
+#             soil_moisture = st.slider("Soil Moisture (%)", 10.0, 40.0, 25.0)
+#             temp = st.slider("Ambient Temp (°C)", 18.0, 30.0, 24.0)
+#             humidity = st.slider("Humidity (%)", 40.0, 70.0, 55.0)
+#         with c2:
+#             light = st.slider("Light Intensity", 200.0, 1000.0, 600.0)
+#             ph = st.slider("Soil pH", 5.5, 7.5, 6.5)
+#             soil_temp = st.slider("Soil Temp (°C)", 15.0, 25.0, 20.0)
+
+#     with st.expander("Nutrient Levels", expanded=True):
+#         c3, c4, c5 = st.columns(3)
+#         with c3: nitrogen = st.slider("Nitrogen", 10.0, 50.0, 30.0)
+#         with c4: phosphorus = st.slider("Phosphorus", 10.0, 50.0, 30.0)
+#         with c5: potassium = st.slider("Potassium", 10.0, 50.0, 30.0)
+
+#     with st.expander("Health Indicators", expanded=True):
+#         c6, c7 = st.columns(2)
+#         with c6: chlorophyll = st.slider("Chlorophyll", 20.0, 50.0, 35.0)
+#         with c7: signal = st.slider("Electro Signal", 0.0, 2.0, 1.0)
+
+#     if st.button("**PREDICT PLANT HEALTH**", type="primary"):
+#         with st.spinner("Analyzing sensor data..."):
+#             payload = {
+#                 "Plant_ID": 1,
+#                 "Soil_Moisture": soil_moisture,
+#                 "Ambient_Temperature": temp,
+#                 "Soil_Temperature": soil_temp,
+#                 "Humidity": humidity,
+#                 "Light_Intensity": light,
+#                 "Soil_pH": ph,
+#                 "Nitrogen_Level": nitrogen,
+#                 "Phosphorus_Level": phosphorus,
+#                 "Potassium_Level": potassium,
+#                 "Chlorophyll_Content": chlorophyll,
+#                 "Electrochemical_Signal": signal
+#             }
+#             try:
+#                 resp = requests.post(f"{API_URL}/predict/health", json=payload, timeout=90)
+#                 result = safe_json(resp)
+
+#                 # SAFE KEY ACCESS
+#                 status = get_nested(result, 'plant_health_status', 'Unknown')
+#                 confidence = get_nested(result, 'confidence', 'N/A')
+
+#                 st.markdown("### Prediction Results")
+#                 col1, col2 = st.columns([3, 1])
+#                 with col1:
+#                     if "Healthy" in status:
+#                         st.success(f"**{status}**")
+#                     elif "Moderate" in status:
+#                         st.warning(f"**{status}**")
+#                     else:
+#                         st.error(f"**{status}**")
+#                 with col2:
+#                     st.metric("Confidence", confidence)
+
+#                 with st.expander("Detailed JSON Response"):
+#                     st.json(result)
+
+#             except Exception as e:
+#                 st.error(f"**Prediction failed:** {e}")
+
+# # ===================================================================
+# # 8. IMAGE DETECTION
+# # ===================================================================
+# elif page == "Image Detection":
+#     st.header("**Image-Based Disease Detection**")
+#     st.markdown("Upload a strawberry leaf image.")
+#     uploaded_file = st.file_uploader("Choose image", type=["jpg", "png", "jpeg"])
+
+#     if uploaded_file:
+#         image = Image.open(uploaded_file)
+#         st.image(image, caption="Uploaded Image", width=400)
+
+#         if st.button("**DETECT DISEASES**", type="primary"):
+#             with st.spinner("Running YOLO detection..."):
+#                 files = {"file": uploaded_file.getvalue()}
+#                 try:
+#                     resp = requests.post(f"{API_URL}/detect/image", files=files, timeout=120)
+#                     result = safe_json(resp)
+
+#                     total = result.get("total_detections", 0)
+#                     if total > 0:
+#                         st.success(f"**{total} disease(s) detected**")
+#                         for i, d in enumerate(result.get("detections", []), 1):
+#                             with st.expander(f"**Detection {i}: {d.get('class', 'Unknown')}**"):
+#                                 st.metric("Confidence", f"{d.get('confidence', 0):.1%}")
+#                                 st.write(f"**Box:** {d.get('bbox', [])}")
+#                     else:
+#                         st.info("**No diseases detected**")
+#                 except Exception as e:
+#                     st.error(f"**Detection failed:** {e}")
+
+# # ===================================================================
+# # 9. VIDEO DETECTION
+# # ===================================================================
+# elif page == "Video Detection":
+#     st.header("**Video Disease Analysis**")
+#     st.markdown("Upload a short video (<30s).")
+#     uploaded_video = st.file_uploader("Choose video", type=["mp4", "avi", "mov"])
+
+#     if uploaded_video:
+#         video_bytes = uploaded_video.getvalue()
+#         st.subheader("**Original Video**")
+#         st.video(video_bytes)
+
+#         if st.button("**PROCESS VIDEO**", type="primary"):
+#             with st.spinner("Processing video... (1–3 min)"):
+#                 prog = st.progress(0)
+#                 tmp_path = "temp_input.mp4"
+
+#                 # Save
+#                 prog.progress(10)
+#                 with open(tmp_path, "wb") as f:
+#                     f.write(video_bytes)
+
+#                 # Upload
+#                 prog.progress(40)
+#                 with open(tmp_path, "rb") as f:
+#                     files = {"file": f}
+#                     resp = requests.post(f"{API_URL}/detect/video", files=files, timeout=180)
+
+#                 prog.progress(70)
+#                 try:
+#                     result = safe_json(resp)
+#                 except Exception as e:
+#                     st.error(f"**Upload failed:** {e}")
+#                     if os.path.exists(tmp_path): os.remove(tmp_path)
+#                     prog.empty()
+#                     st.stop()
+
+#                 if result.get("error"):
+#                     st.error(f"**Backend Error:** {result['error']}")
+#                 else:
+#                     st.success("**Video processed!**")
+#                     prog.progress(85)
+
+#                     video_path = result.get("output_video_path")
+#                     if video_path:
+#                         vid_resp = requests.get(f"{API_URL}/video/{video_path}", stream=True, timeout=60)
+#                         if vid_resp.status_code == 200:
+#                             prog.progress(100)
+#                             annotated = vid_resp.content
+#                             st.subheader("**Annotated Video**")
+#                             st.video(annotated)
+#                             st.download_button("Download Result", annotated, "annotated.avi", "video/avi")
+#                         else:
+#                             st.error(f"Failed to fetch video: {vid_resp.status_code}")
+#                     else:
+#                         st.error("No output video path returned.")
+
+#                 if os.path.exists(tmp_path): os.remove(tmp_path)
+#                 prog.empty()
+
+
+
+# app.py - Strawberry Disease Prediction Dashboard (GUARANTEED TO SHOW OUTPUT)
+import streamlit as st
+import requests
+import json
+import os
+from PIL import Image
+
+# ===================================================================
+# 1. MUST BE FIRST: Streamlit config
+# ===================================================================
+st.set_page_config(
+    page_title="Strawberry Disease Predictor",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ===================================================================
+# 2. CONFIG: Backend URL from secrets
+# ===================================================================
+API_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+st.sidebar.markdown(f"**Backend URL:** `{API_URL}`")
+
+# ===================================================================
+# 3. API STATUS: 90s timeout
+# ===================================================================
+@st.cache_data(ttl=60)  # Cache status for 60s
+def check_api_status():
+    try:
+        resp = requests.get(f"{API_URL}/", timeout=90)
+        resp.raise_for_status()
+        return True, "Connected"
+    except requests.exceptions.RequestException as e:
+        return False, str(e)
+
+is_connected, status_msg = check_api_status()
+
+if is_connected:
+    st.success(" **FastAPI Server: CONNECTED**")
+else:
+    st.error(" **FastAPI Server: NOT RUNNING**")
+    st.code(status_msg)
+    st.info("**Fix:** Wait 60–90s or set up [UptimeRobot](https://uptimerobot.com) to keep Render awake.")
+    st.stop()
+
+# ===================================================================
+# 4. HEADER
+# ===================================================================
+st.markdown("""
+    <style>
+        .main-header { text-align: center; color: #228B22; font-size: 2.5rem; }
+        .stButton>button { width: 100%; }
+        .stMetric { text-align: center; }
+        .output-box { padding: 15px; border-radius: 10px; margin: 10px 0; }
+    </style>
+""", unsafe_allow_html=True)
+
+st.markdown('<h1 class="main-header">Strawberry Disease Prediction Dashboard</h1>', unsafe_allow_html=True)
+st.markdown("---")
+
+# ===================================================================
+# 5. NAVIGATION
+# ===================================================================
+st.sidebar.title("Navigation")
+page = st.sidebar.radio("Choose Action", [
+    "Sensor Prediction",
+    "Image Detection",
+    "Video Detection"
+], label_visibility="collapsed")
+
+# ===================================================================
+# 6. HELPER: Safe JSON
+# ===================================================================
+def safe_json(resp):
+    try:
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.HTTPError:
+        raise ValueError(f"HTTP {resp.status_code} – {resp.text[:500]}")
+    except json.JSONDecodeError:
+        raise ValueError(f"Invalid JSON – {resp.text[:500]}")
+
+def get_val(d, key, default="N/A"):
+    return d.get(key, default) if isinstance(d, dict) else default
+
+# ===================================================================
+# 7. SENSOR PREDICTION
+# ===================================================================
+if page == "Sensor Prediction":
+    st.header("**Sensor-Based Health Prediction**")
+    st.markdown("Enter sensor values and click **Predict**.")
+
+    with st.expander("Environmental Parameters", expanded=True):
         c1, c2 = st.columns(2)
         with c1:
-            soil_moisture = st.slider("Soil Moisture (%)", 10.0, 40.0, 25.0)
-            temp = st.slider("Ambient Temp (°C)", 18.0, 30.0, 24.0)
-            humidity = st.slider("Humidity (%)", 40.0, 70.0, 55.0)
+            soil_moisture = st.slider("Soil Moisture (%)", 10.0, 40.0, 25.0, key="sm")
+            temp = st.slider("Ambient Temp (°C)", 18.0, 30.0, 24.0, key="at")
+            humidity = st.slider("Humidity (%)", 40.0, 70.0, 55.0, key="hum")
         with c2:
-            light = st.slider("Light Intensity", 200.0, 1000.0, 600.0)
-            ph = st.slider("Soil pH", 5.5, 7.5, 6.5)
-            soil_temp = st.slider("Soil Temp (°C)", 15.0, 25.0, 20.0)
+            light = st.slider("Light Intensity", 200.0, 1000.0, 600.0, key="li")
+            ph = st.slider("Soil pH", 5.5, 7.5, 6.5, key="ph")
+            soil_temp = st.slider("Soil Temp (°C)", 15.0, 25.0, 20.0, key="st")
 
     with st.expander("Nutrient Levels", expanded=True):
         c3, c4, c5 = st.columns(3)
-        with c3: nitrogen = st.slider("Nitrogen", 10.0, 50.0, 30.0)
-        with c4: phosphorus = st.slider("Phosphorus", 10.0, 50.0, 30.0)
-        with c5: potassium = st.slider("Potassium", 10.0, 50.0, 30.0)
+        with c3: nitrogen = st.slider("Nitrogen", 10.0, 50.0, 30.0, key="n")
+        with c4: phosphorus = st.slider("Phosphorus", 10.0, 50.0, 30.0, key="p")
+        with c5: potassium = st.slider("Potassium", 10.0, 50.0, 30.0, key="k")
 
     with st.expander("Health Indicators", expanded=True):
         c6, c7 = st.columns(2)
-        with c6: chlorophyll = st.slider("Chlorophyll", 20.0, 50.0, 35.0)
-        with c7: signal = st.slider("Electro Signal", 0.0, 2.0, 1.0)
+        with c6: chlorophyll = st.slider("Chlorophyll", 20.0, 50.0, 35.0, key="chl")
+        with c7: signal = st.slider("Electro Signal", 0.0, 2.0, 1.0, key="sig")
 
-    if st.button("**PREDICT PLANT HEALTH**", type="primary"):
+    if st.button("**PREDICT PLANT HEALTH**", type="primary", key="predict_health"):
         with st.spinner("Analyzing sensor data..."):
             payload = {
                 "Plant_ID": 1,
@@ -597,117 +846,134 @@ if page == "Sensor Prediction":
                 resp = requests.post(f"{API_URL}/predict/health", json=payload, timeout=90)
                 result = safe_json(resp)
 
-                # SAFE KEY ACCESS
-                status = get_nested(result, 'plant_health_status', 'Unknown')
-                confidence = get_nested(result, 'confidence', 'N/A')
-
-                st.markdown("### Prediction Results")
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    if "Healthy" in status:
-                        st.success(f"**{status}**")
-                    elif "Moderate" in status:
-                        st.warning(f"**{status}**")
-                    else:
-                        st.error(f"**{status}**")
-                with col2:
-                    st.metric("Confidence", confidence)
-
-                with st.expander("Detailed JSON Response"):
-                    st.json(result)
+                st.session_state.sensor_result = result  # Save to session
+                st.rerun()  # Force refresh to show output
 
             except Exception as e:
-                st.error(f"**Prediction failed:** {e}")
+                st.error(f"**Error:** {e}")
+
+    # === SHOW RESULT AFTER PREDICTION ===
+    if "sensor_result" in st.session_state:
+        result = st.session_state.sensor_result
+        status = get_val(result, 'plant_health_status', 'Unknown')
+        confidence = get_val(result, 'confidence', 'N/A')
+
+        st.markdown("### **Prediction Results**", unsafe_allow_html=True)
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            if "Healthy" in status:
+                st.success(f"**{status}**")
+            elif "Moderate" in status:
+                st.warning(f"**{status}**")
+            else:
+                st.error(f"**{status}**")
+        with col2:
+            st.metric("Confidence", confidence)
+
+        with st.expander("**Detailed JSON Response**"):
+            st.json(result)
+
+        if st.button("Clear Result"):
+            del st.session_state.sensor_result
+            st.rerun()
 
 # ===================================================================
 # 8. IMAGE DETECTION
 # ===================================================================
 elif page == "Image Detection":
     st.header("**Image-Based Disease Detection**")
-    st.markdown("Upload a strawberry leaf image.")
-    uploaded_file = st.file_uploader("Choose image", type=["jpg", "png", "jpeg"])
+    uploaded_file = st.file_uploader("Upload strawberry leaf image", type=["jpg", "png", "jpeg"])
 
     if uploaded_file:
         image = Image.open(uploaded_file)
         st.image(image, caption="Uploaded Image", width=400)
 
-        if st.button("**DETECT DISEASES**", type="primary"):
+        if st.button("**DETECT DISEASES**", type="primary", key="detect_image"):
             with st.spinner("Running YOLO detection..."):
-                files = {"file": uploaded_file.getvalue()}
                 try:
-                    resp = requests.post(f"{API_URL}/detect/image", files=files, timeout=120)
+                    resp = requests.post(f"{API_URL}/detect/image", files={"file": uploaded_file.getvalue()}, timeout=120)
                     result = safe_json(resp)
 
-                    total = result.get("total_detections", 0)
-                    if total > 0:
-                        st.success(f"**{total} disease(s) detected**")
-                        for i, d in enumerate(result.get("detections", []), 1):
-                            with st.expander(f"**Detection {i}: {d.get('class', 'Unknown')}**"):
-                                st.metric("Confidence", f"{d.get('confidence', 0):.1%}")
-                                st.write(f"**Box:** {d.get('bbox', [])}")
-                    else:
-                        st.info("**No diseases detected**")
+                    st.session_state.image_result = result
+                    st.rerun()
+
                 except Exception as e:
-                    st.error(f"**Detection failed:** {e}")
+                    st.error(f"**Error:** {e}")
+
+    if "image_result" in st.session_state:
+        result = st.session_state.image_result
+        total = result.get("total_detections", 0)
+
+        if total > 0:
+            st.success(f"**{total} disease(s) detected**")
+            for i, d in enumerate(result.get("detections", []), 1):
+                with st.expander(f"**Detection {i}: {d.get('class', 'Unknown')}**"):
+                    st.metric("Confidence", f"{d.get('confidence', 0):.1%}")
+                    st.write(f"**Box:** {d.get('bbox', [])}")
+        else:
+            st.info("**No diseases detected**")
+
+        with st.expander("**Raw JSON**"):
+            st.json(result)
+
+        if st.button("Clear Image Result"):
+            del st.session_state.image_result
+            st.rerun()
 
 # ===================================================================
 # 9. VIDEO DETECTION
 # ===================================================================
 elif page == "Video Detection":
     st.header("**Video Disease Analysis**")
-    st.markdown("Upload a short video (<30s).")
-    uploaded_video = st.file_uploader("Choose video", type=["mp4", "avi", "mov"])
+    uploaded_video = st.file_uploader("Upload short video (<30s)", type=["mp4", "avi", "mov"])
 
     if uploaded_video:
-        video_bytes = uploaded_video.getvalue()
-        st.subheader("**Original Video**")
-        st.video(video_bytes)
+        st.video(uploaded_video.getvalue())
 
-        if st.button("**PROCESS VIDEO**", type="primary"):
+        if st.button("**PROCESS VIDEO**", type="primary", key="process_video"):
             with st.spinner("Processing video... (1–3 min)"):
                 prog = st.progress(0)
                 tmp_path = "temp_input.mp4"
-
-                # Save
-                prog.progress(10)
                 with open(tmp_path, "wb") as f:
-                    f.write(video_bytes)
+                    f.write(uploaded_video.getvalue())
+                prog.progress(30)
 
-                # Upload
-                prog.progress(40)
-                with open(tmp_path, "rb") as f:
-                    files = {"file": f}
-                    resp = requests.post(f"{API_URL}/detect/video", files=files, timeout=180)
-
-                prog.progress(70)
                 try:
+                    with open(tmp_path, "rb") as f:
+                        resp = requests.post(f"{API_URL}/detect/video", files={"file": f}, timeout=180)
+                    prog.progress(70)
                     result = safe_json(resp)
+                    st.session_state.video_result = result
+                    st.rerun()
                 except Exception as e:
-                    st.error(f"**Upload failed:** {e}")
-                    if os.path.exists(tmp_path): os.remove(tmp_path)
+                    st.error(f"**Error:** {e}")
+                finally:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
                     prog.empty()
-                    st.stop()
 
-                if result.get("error"):
-                    st.error(f"**Backend Error:** {result['error']}")
-                else:
-                    st.success("**Video processed!**")
-                    prog.progress(85)
-
-                    video_path = result.get("output_video_path")
-                    if video_path:
-                        vid_resp = requests.get(f"{API_URL}/video/{video_path}", stream=True, timeout=60)
-                        if vid_resp.status_code == 200:
-                            prog.progress(100)
-                            annotated = vid_resp.content
-                            st.subheader("**Annotated Video**")
-                            st.video(annotated)
-                            st.download_button("Download Result", annotated, "annotated.avi", "video/avi")
-                        else:
-                            st.error(f"Failed to fetch video: {vid_resp.status_code}")
+    if "video_result" in st.session_state:
+        result = st.session_state.video_result
+        if result.get("error"):
+            st.error(f"**Backend Error:** {result['error']}")
+        else:
+            st.success("**Video processed!**")
+            video_path = result.get("output_video_path")
+            if video_path:
+                try:
+                    vid_resp = requests.get(f"{API_URL}/video/{video_path}", stream=True, timeout=60)
+                    if vid_resp.status_code == 200:
+                        video_bytes = vid_resp.content
+                        st.video(video_bytes)
+                        st.download_button("Download Annotated Video", video_bytes, "result.avi", "video/avi")
                     else:
-                        st.error("No output video path returned.")
+                        st.error("Failed to download video.")
+                except:
+                    st.error("Video streaming failed.")
+            st.json(result)
 
-                if os.path.exists(tmp_path): os.remove(tmp_path)
-                prog.empty()
+        if st.button("Clear Video Result"):
+            del st.session_state.video_result
+            st.rerun()
+
 
