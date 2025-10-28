@@ -465,8 +465,7 @@
 
 
 
-
-# app.py - Streamlit Dashboard with FULL Video Support
+# app.py - Streamlit Dashboard with FULL Video Support (Render + Streamlit Cloud Ready)
 import streamlit as st
 import requests
 import json
@@ -475,17 +474,17 @@ import os
 import time
 
 # CONFIGURATION
-API_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000")
+API_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
 st.set_page_config(page_title="Strawberry Disease Predictor", layout="wide", initial_sidebar_state="expanded")
 
 def check_api_status():
     try:
-        response = requests.get(f"{API_URL}/", timeout=2)
+        response = requests.get(API_URL, timeout=5)
         return response.status_code == 200
     except:
         return False
 
-# Header with styled markdown
+# Header
 st.markdown("""
     <style>
         .main-header { text-align: center; color: #228B22; }
@@ -497,15 +496,15 @@ st.markdown("""
 st.markdown('<h1 class="main-header">Strawberry Disease Prediction Dashboard</h1>', unsafe_allow_html=True)
 st.markdown("---")
 
-# API Status Check with icons
+# API Status
 if check_api_status():
     st.success(" **FastAPI Server: CONNECTED**")
 else:
     st.error(" **FastAPI Server: NOT RUNNING**")
-    st.info("Fix: Run `uvicorn main:app --reload` in another terminal")
+    st.info("Fix: Check Render logs or wake up the service.")
     st.stop()
 
-# Sidebar Navigation with emojis
+# Sidebar
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Choose Action", [
     "Sensor Prediction", 
@@ -550,28 +549,28 @@ if page == "Sensor Prediction":
                 "Electrochemical_Signal": signal
             }
             try:
-                response = requests.post(f"{API_URL}/predict/health", json=payload, timeout=10)
+                response = requests.post(f"{API_URL}/predict/health", json=payload, timeout=15)
                 if response.status_code != 200:
                     st.error(f"API Error {response.status_code}: {response.text}")
                 else:
-                    try:
-                        result = response.json()
-                    except json.JSONDecodeError:
-                        st.error("Invalid JSON response from server.")
-                    else:
-                        st.markdown("### Prediction Results")
-                        col_a, col_b = st.columns([3,1])
-                        with col_a:
-                            status = result['plant_health_status']
-                            if "Healthy" in status: st.success(f"**{status}**")
-                            elif "Moderate" in status: st.warning(f"**{status}**")
-                            else: st.error(f"**{status}**")
-                        with col_b:
-                            st.metric("Confidence", result['confidence'])
-                        with st.expander("Detailed JSON Response"):
-                            st.json(result)
+                    result = response.json()
+                    st.markdown("### Prediction Results")
+                    col_a, col_b = st.columns([3,1])
+                    with col_a:
+                        status = result['plant_health_status']
+                        if "Healthy" in status: st.success(f"**{status}**")
+                        elif "Moderate" in status: st.warning(f"**{status}**")
+                        else: st.error(f"**{status}**")
+                    with col_b:
+                        st.metric("Confidence", result['confidence'])
+                    with st.expander("Detailed JSON Response"):
+                        st.json(result)
+            except requests.exceptions.RequestException as e:
+                st.error(f"Network Error: {str(e)}")
+            except json.JSONDecodeError:
+                st.error(f"Invalid JSON from server: {response.text[:200]}")
             except Exception as e:
-                st.error(f"**Error:** {str(e)}")
+                st.error(f"Error: {str(e)}")
 
 # === IMAGE DETECTION ===
 elif page == "Image Detection":
@@ -581,7 +580,7 @@ elif page == "Image Detection":
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption="Uploaded Image", use_column_width=False, width=400)
+        st.image(image, caption="Uploaded Image", width=400)
         
         if st.button("**DETECT PLANTS**", type="primary"):
             with st.spinner("Detecting objects in image..."):
@@ -589,23 +588,19 @@ elif page == "Image Detection":
                 try:
                     response = requests.post(f"{API_URL}/detect/image", files=files, timeout=30)
                     if response.status_code != 200:
-                        st.error(f"API Error {response.status_code}: {response.text}")
+                        st.error(f"Error {response.status_code}: {response.text}")
                     else:
-                        try:
-                            result = response.json()
-                        except json.JSONDecodeError:
-                            st.error("Invalid JSON response from server.")
+                        result = response.json()
+                        if "detections" in result and result["total_detections"] > 0:
+                            st.success(f"**Found {result['total_detections']} detection(s)**")
+                            for i, detection in enumerate(result["detections"], 1):
+                                with st.expander(f"**Detection {i}: {detection['class']}**"):
+                                    st.metric("Confidence", f"{detection['confidence']:.1%}")
+                                    st.write(f"**Bounding Box:** {detection['bbox']}")
                         else:
-                            if "detections" in result and result["total_detections"] > 0:
-                                st.success(f"**Found {result['total_detections']} detection(s)**")
-                                for i, detection in enumerate(result["detections"], 1):
-                                    with st.expander(f"**Detection {i}: {detection['class']}**"):
-                                        st.metric("Confidence", f"{detection['confidence']:.1%}")
-                                        st.write(f"**Bounding Box:** {detection['bbox']}")
-                            else:
-                                st.info("**No plants detected**")
+                            st.info("**No plants detected**")
                 except Exception as e:
-                    st.error(f"**Error:** {str(e)}")
+                    st.error(f"Error: {str(e)}")
 
 # === VIDEO DETECTION ===
 elif page == "Video Detection":
@@ -623,62 +618,59 @@ elif page == "Video Detection":
             with st.spinner("**Processing Video...** (This may take 1-3 minutes)"):
                 progress_bar = st.progress(0)
                 temp_video_path = "temp_input.mp4"
+                
+                # Save temp
+                progress_bar.progress(10)
                 with open(temp_video_path, "wb") as f:
                     f.write(original_video_bytes)
                 
+                # Upload
                 progress_bar.progress(40)
                 with open(temp_video_path, "rb") as f:
                     files = {"file": f}
                     try:
                         response = requests.post(f"{API_URL}/detect/video", files=files, timeout=180)
+                        progress_bar.progress(70)
+                        
                         if response.status_code != 200:
                             st.error(f"API Error {response.status_code}: {response.text}")
-                            progress_bar.empty()
-                            if os.path.exists(temp_video_path):
-                                os.remove(temp_video_path)
-                            st.stop()
-                        
-                        try:
-                            result = response.json()
-                        except json.JSONDecodeError:
-                            st.error("Invalid JSON response from server.")
-                            progress_bar.empty()
-                            if os.path.exists(temp_video_path):
-                                os.remove(temp_video_path)
-                            st.stop()
-                        
-                        if "error" in result:
-                            st.error(f"**API Error:** {result['error']}")
                         else:
-                            st.success(" **Video Processed Successfully!**")
-                            progress_bar.progress(85)
-                            video_path = result['output_video_path']
-                            video_response = requests.get(f"{API_URL}/video/{video_path}", stream=True, timeout=30)
-                            
-                            if video_response.status_code == 200:
-                                progress_bar.progress(100)
-                                processed_video_bytes = video_response.content
-                                st.subheader("**Annotated Video**")
-                                st.video(processed_video_bytes)
-                                
-                                st.subheader("**Processing Summary**")
-                                col_a, col_b = st.columns(2)
-                                with col_a: 
-                                    st.metric("Total Frames", result['total_frames'])
-                                with col_b: 
-                                    st.metric("Status", "Completed")
-                                
-                                st.download_button(
-                                    label="**Download Annotated Video**",
-                                    data=processed_video_bytes,
-                                    file_name="annotated_video.avi",
-                                    mime="video/avi"
-                                )
+                            result = response.json()
+                            if "error" in result:
+                                st.error(f"API Error: {result['error']}")
                             else:
-                                st.error(f"**Failed to fetch video:** {video_response.text}")
+                                video_id = result["video_id"]
+                                st.success("**Video Processed Successfully!**")
+                                
+                                # Fetch video
+                                progress_bar.progress(85)
+                                video_url = f"{API_URL}/video/{video_id}"
+                                video_response = requests.get(video_url, stream=True, timeout=30)
+                                
+                                if video_response.status_code == 200:
+                                    progress_bar.progress(100)
+                                    processed_video_bytes = video_response.content
+                                    
+                                    st.subheader("**Annotated Video**")
+                                    st.video(processed_video_bytes)
+                                    
+                                    col_a, col_b = st.columns(2)
+                                    with col_a: st.metric("Total Frames", result['total_frames'])
+                                    with col_b: st.metric("Status", "Completed")
+                                    
+                                    st.download_button(
+                                        label="**Download Annotated Video**",
+                                        data=processed_video_bytes,
+                                        file_name=f"annotated_{video_id}.avi",
+                                        mime="video/avi"
+                                    )
+                                else:
+                                    st.error(f"Failed to fetch video: {video_response.text}")
                     except Exception as e:
-                        st.error(f"**Request failed:** {str(e)}")
-                    finally:
-                        if os.path.exists(temp_video_path):
-                            os.remove(temp_video_path)
-                        progress_bar.empty()
+                        st.error(f"Error: {str(e)}")
+                
+                # Cleanup
+                if os.path.exists(temp_video_path):
+                    os.remove(temp_video_path)
+                progress_bar.empty()
+
