@@ -478,21 +478,19 @@
 #     port = int(os.environ.get("PORT", 8000))
 #     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
 
-# main.py - Render-Deployable FastAPI (Sensor + Image + Video with Background Processing)
+# main.py – FastAPI (Sensor + Image + Video) – 100% Render-compatible
 import os
 import io
 import uuid
 import shutil
 import warnings
 import mimetypes
-import time
 import numpy as np
 from PIL import Image
 from contextlib import asynccontextmanager
-from typing import Dict, Any
 
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -503,16 +501,14 @@ from ultralytics import YOLO
 warnings.filterwarnings("ignore")
 
 # ----------------------------------------------------------------------
-# MODEL PATHS (Ensure these files are in your repo root!)
+# VERIFY REQUIRED MODEL FILES (fails fast if missing)
 # ----------------------------------------------------------------------
-MODEL_FILES = ["best.pt", "Decision_Tree.pkl", "scaler.pkl"]
-
-for model_file in MODEL_FILES:
-    if not os.path.exists(model_file):
-        raise FileNotFoundError(f"Required model file not found: {model_file}")
+for f in ["best.pt", "Decision_Tree.pkl", "scaler.pkl"]:
+    if not os.path.exists(f):
+        raise FileNotFoundError(f"Missing required model: {f}")
 
 # ----------------------------------------------------------------------
-# GLOBAL MODELS (Lazy Load)
+# GLOBAL / LAZY LOADED MODELS
 # ----------------------------------------------------------------------
 yolo_model = None
 dt_model = None
@@ -526,14 +522,13 @@ async def load_models():
         print("Loading DT + Scaler...")
         dt_model = joblib.load("Decision_Tree.pkl")
         scaler = joblib.load("scaler.pkl")
-        # scikit-learn 1.6+ fix
+        # scikit-learn 1.6+ compatibility
         if not hasattr(dt_model, "monotonic_cst"):
             try:
                 dt_model.__dict__["monotonic_cst"] = None
             except:
                 pass
         print("DT + Scaler loaded!")
-
     if yolo_model is None:
         print("Loading YOLO...")
         yolo_model = YOLO("best.pt")
@@ -541,70 +536,7 @@ async def load_models():
 
 
 # ----------------------------------------------------------------------
-# TASK STORAGE (In-Memory for Background Jobs)
-# ----------------------------------------------------------------------
-tasks: Dict[str, Dict[str, Any]] = {}  # {task_id: {"status": "processing|done|error", "output_path": str, "error": str, "timestamp": float}}
-
-
-def process_video_background(task_id: str, input_path: str):
-    """Background: Run YOLO on video, update task status."""
-    try:
-        # Simulate start
-        tasks[task_id]["status"] = "processing"
-        tasks[task_id]["timestamp"] = time.time()
-
-        # YOLO predict (optimized: stream=True for lazy processing)
-        results = yolo_model.predict(
-            source=input_path,
-            save=True,
-            project="runs/detect",
-            name=f"predict_{task_id}",
-            exist_ok=True,
-            stream=True,  # Lazy frame processing (less memory/time)
-            verbose=False,
-        )
-
-        # Output path
-        video_name = os.path.splitext(os.path.basename(input_path))[0] + ".avi"
-        output_path = os.path.join("runs/detect", f"predict_{task_id}", video_name)
-        rel_path = os.path.relpath(output_path, os.getcwd())
-
-        tasks[task_id]["status"] = "done"
-        tasks[task_id]["output_video_path"] = rel_path
-        tasks[task_id]["total_frames"] = len(list(results))  # Materialize for count
-
-        # Cleanup input
-        try:
-            os.remove(input_path)
-        except:
-            pass
-
-        # Schedule cleanup of output after 1 hour
-        def cleanup_output():
-            time.sleep(3600)
-            try:
-                if os.path.exists(output_path):
-                    os.remove(output_path)
-                if os.path.exists(os.path.dirname(output_path)):
-                    shutil.rmtree(os.path.dirname(output_path))
-                if task_id in tasks:
-                    del tasks[task_id]
-            except:
-                pass
-        import threading
-        threading.Thread(target=cleanup_output, daemon=True).start()
-
-    except Exception as e:
-        tasks[task_id]["status"] = "error"
-        tasks[task_id]["error"] = str(e)
-    finally:
-        # Cleanup temp dir
-        temp_dir = os.path.dirname(input_path)
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-# ----------------------------------------------------------------------
-# SENSOR MODEL
+# SENSOR DATA MODEL
 # ----------------------------------------------------------------------
 class SensorData(BaseModel):
     Plant_ID: int = 1
@@ -622,7 +554,7 @@ class SensorData(BaseModel):
 
 
 # ----------------------------------------------------------------------
-# FASTAPI APP
+# FASTAPI APP + LIFESPAN
 # ----------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -630,7 +562,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Strawberry Disease API", lifespan=lifespan)
+app = FastAPI(title="Strawberry Disease Prediction API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -642,7 +574,7 @@ app.add_middleware(
 
 
 # ----------------------------------------------------------------------
-# 1. HEALTH PREDICTION (Confidence Fixed)
+# 1. SENSOR HEALTH PREDICTION (unchanged – confidence fixed)
 # ----------------------------------------------------------------------
 @app.post("/predict/health")
 async def predict_health(data: SensorData):
@@ -657,9 +589,9 @@ async def predict_health(data: SensorData):
         scaled = scaler.transform(features)
         pred = int(dt_model.predict(scaled)[0])
 
-        # FIX: Confidence was >100% due to log-proba
-        raw_proba = dt_model.predict_proba(scaled)[0]
-        proba = np.exp(raw_proba) / np.sum(np.exp(raw_proba))
+        # Fix >100% confidence (log-proba → softmax)
+        raw = dt_model.predict_proba(scaled)[0]
+        proba = np.exp(raw) / np.sum(np.exp(raw))
         confidence = proba.max() * 100
 
         return {
@@ -672,7 +604,7 @@ async def predict_health(data: SensorData):
 
 
 # ----------------------------------------------------------------------
-# 2. IMAGE DETECTION
+# 2. IMAGE DETECTION (unchanged)
 # ----------------------------------------------------------------------
 @app.post("/detect/image")
 async def detect_image(file: UploadFile = File(...)):
@@ -681,9 +613,10 @@ async def detect_image(file: UploadFile = File(...)):
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
         results = yolo_model(image, verbose=False)
+
         detections = []
         for r in results:
-            boxes = r.boxes
+            boxes = getattr(r, "boxes", None)
             if boxes is not None:
                 for box in boxes:
                     detections.append({
@@ -691,79 +624,77 @@ async def detect_image(file: UploadFile = File(...)):
                         "confidence": float(box.conf),
                         "bbox": box.xyxy.tolist()[0],
                     })
+
         return {"detections": detections, "total_detections": len(detections)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------------------------------------------------------
-# 3. VIDEO DETECTION (Now Background - Returns Immediately)
+# 3. VIDEO DETECTION – FIXED (no 502)
 # ----------------------------------------------------------------------
 @app.post("/detect/video")
-async def detect_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def detect_video(file: UploadFile = File(...)):
     try:
         await load_models()
 
-        # Temp setup
+        # ---- 1. Save uploaded file
         temp_dir = "temp_video"
         os.makedirs(temp_dir, exist_ok=True)
-        task_id = str(uuid.uuid4())[:8]
-        input_path = os.path.join(temp_dir, f"input_{task_id}.mp4")
+        uid = str(uuid.uuid4())[:8]
+        input_path = os.path.join(temp_dir, f"input_{uid}.mp4")
 
-        # Save uploaded file
         with open(input_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # Init task
-        tasks[task_id] = {"status": "queued", "timestamp": time.time()}
+        # ---- 2. Run YOLO (saves .avi automatically)
+        results = yolo_model.predict(
+            source=input_path,
+            save=True,
+            project="runs/detect",
+            name=f"predict_{uid}",
+            exist_ok=True,
+        )
 
-        # Background process
-        background_tasks.add_task(process_video_background, task_id, input_path)
+        # ---- 3. Build output path
+        base_name = os.path.splitext(os.path.basename(input_path))[0]
+        output_path = os.path.join("runs/detect", f"predict_{uid}", f"{base_name}.avi")
+        rel_path = os.path.relpath(output_path, os.getcwd())   # for GET endpoint
+
+        # ---- 4. Clean up input
+        try:
+            os.remove(input_path)
+        except:
+            pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
         return {
-            "message": "Video processing started in background",
-            "task_id": task_id,
-            "poll_url": f"/task/{task_id}",
-            "estimated_time": "30-120 seconds (depending on video length)",
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ----------------------------------------------------------------------
-# 3.1 POLL TASK STATUS
-# ----------------------------------------------------------------------
-@app.get("/task/{task_id}")
-async def get_task_status(task_id: str):
-    if task_id not in tasks:
-        raise HTTPException(status_code=404, detail="Task not found")
-    task = tasks[task_id]
-    if task["status"] == "done":
-        return {
-            **task,
             "message": "Video processed successfully",
-            "output_video_url": f"/video/{task['output_video_path']}",
+            "output_video_path": rel_path,
+            "total_frames": len(results),
         }
-    elif task["status"] == "error":
-        raise HTTPException(status_code=500, detail=task.get("error", "Unknown error"))
-    else:
-        elapsed = time.time() - task["timestamp"]
-        return {
-            **task,
-            "elapsed_seconds": round(elapsed, 1),
-            "message": f"Processing... ({task['status']})",
-        }
+
+    except Exception as e:
+        # Return JSON error – never let exception bubble to 502
+        raise HTTPException(status_code=500, detail=f"Video detection failed: {str(e)}")
 
 
 # ----------------------------------------------------------------------
-# 4. SERVE VIDEO
+# 4. SERVE PROCESSED VIDEO – SIMPLE & RELIABLE
 # ----------------------------------------------------------------------
 @app.get("/video/{video_path:path}")
 async def get_video(video_path: str):
     full_path = os.path.abspath(os.path.join(os.getcwd(), video_path))
+
     if not os.path.exists(full_path):
         return JSONResponse({"error": "Video not found"}, status_code=404)
-    return FileResponse(full_path, media_type="video/avi")
+
+    media_type = mimetypes.guess_type(full_path)[0] or "video/avi"
+    return FileResponse(
+        full_path,
+        media_type=media_type,
+        filename=os.path.basename(full_path),
+    )
 
 
 # ----------------------------------------------------------------------
@@ -771,13 +702,20 @@ async def get_video(video_path: str):
 # ----------------------------------------------------------------------
 @app.get("/")
 async def root():
-    return {"message": "API is running!", "endpoints": ["/predict/health", "/detect/image", "/detect/video (now async)", "/task/{task_id} (new)"]}
+    return {
+        "message": "API is running",
+        "endpoints": [
+            "POST /predict/health",
+            "POST /detect/image",
+            "POST /detect/video",
+            "GET  /video/{path}",
+        ],
+    }
 
 
 # ----------------------------------------------------------------------
-# RENDER ENTRYPOINT (Critical!)
+# RENDER ENTRYPOINT (MUST USE $PORT)
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    # Render sets $PORT
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
