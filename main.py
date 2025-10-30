@@ -255,7 +255,7 @@
 #     port = 4000
 #     uvicorn.run(app, host="0.0.0.0", port=port)
 
-# main.py - FastAPI Backend (Sensor + Image + Video) - Render-Optimized
+# main.py - Render-Deployable FastAPI (Sensor + Image + Video)
 import os
 import io
 import uuid
@@ -278,7 +278,16 @@ from ultralytics import YOLO
 warnings.filterwarnings("ignore")
 
 # ----------------------------------------------------------------------
-# GLOBAL / LAZY LOADED MODELS
+# MODEL PATHS (Ensure these files are in your repo root!)
+# ----------------------------------------------------------------------
+MODEL_FILES = ["best.pt", "Decision_Tree.pkl", "scaler.pkl"]
+
+for model_file in MODEL_FILES:
+    if not os.path.exists(model_file):
+        raise FileNotFoundError(f"Required model file not found: {model_file}")
+
+# ----------------------------------------------------------------------
+# GLOBAL MODELS (Lazy Load)
 # ----------------------------------------------------------------------
 yolo_model = None
 dt_model = None
@@ -287,35 +296,27 @@ label_map = {0: "Healthy", 1: "Moderate Stress", 2: "High Stress"}
 
 
 async def load_models():
-    """Load YOLO, DecisionTree and Scaler only once (lazy)."""
     global yolo_model, dt_model, scaler
-
     if dt_model is None or scaler is None:
-        print("Loading DT + Scaler ...")
+        print("Loading DT + Scaler...")
         dt_model = joblib.load("Decision_Tree.pkl")
         scaler = joblib.load("scaler.pkl")
-
-        # ------------------------------------------------------------------
-        # scikit-learn 1.6+ compatibility fix for monotonic_cst
-        # ------------------------------------------------------------------
+        # scikit-learn 1.6+ fix
         if not hasattr(dt_model, "monotonic_cst"):
             try:
                 dt_model.__dict__["monotonic_cst"] = None
-            except Exception:
-                try:
-                    setattr(dt_model, "monotonic_cst", None)
-                except Exception:
-                    pass
+            except:
+                pass
         print("DT + Scaler loaded!")
 
     if yolo_model is None:
-        print("Loading YOLO ...")
-        yolo_model = YOLO("best.pt")          # change to a lighter model if needed
+        print("Loading YOLO...")
+        yolo_model = YOLO("best.pt")
         print("YOLO loaded!")
 
 
 # ----------------------------------------------------------------------
-# SENSOR DATA MODEL
+# SENSOR MODEL
 # ----------------------------------------------------------------------
 class SensorData(BaseModel):
     Plant_ID: int = 1
@@ -333,23 +334,16 @@ class SensorData(BaseModel):
 
 
 # ----------------------------------------------------------------------
-# FASTAPI APP + LIFESPAN
+# FASTAPI APP
 # ----------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await load_models()          # warm-up on startup (still lazy if already loaded)
+    await load_models()
     yield
-    # optional cleanup on shutdown
-    # (YOLO releases GPU memory automatically)
 
 
-app = FastAPI(
-    title="Strawberry Disease Prediction API",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="Strawberry Disease API", lifespan=lifespan)
 
-# CORS – change to your frontend URL in production
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -360,55 +354,33 @@ app.add_middleware(
 
 
 # ----------------------------------------------------------------------
-# 1. SENSOR HEALTH PREDICTION
+# 1. HEALTH PREDICTION (Confidence Fixed)
 # ----------------------------------------------------------------------
 @app.post("/predict/health")
 async def predict_health(data: SensorData):
     try:
         await load_models()
-
-        # --------------------------------------------------------------
-        # Build feature vector
-        # --------------------------------------------------------------
         features = np.array([[
-            data.Plant_ID,
-            data.Soil_Moisture,
-            data.Ambient_Temperature,
-            data.Soil_Temperature,
-            data.Humidity,
-            data.Light_Intensity,
-            data.Soil_pH,
-            data.Nitrogen_Level,
-            data.Phosphorus_Level,
-            data.Potassium_Level,
-            data.Chlorophyll_Content,
-            data.Electrochemical_Signal,
+            data.Plant_ID, data.Soil_Moisture, data.Ambient_Temperature,
+            data.Soil_Temperature, data.Humidity, data.Light_Intensity,
+            data.Soil_pH, data.Nitrogen_Level, data.Phosphorus_Level,
+            data.Potassium_Level, data.Chlorophyll_Content, data.Electrochemical_Signal
         ]])
-
         scaled = scaler.transform(features)
-
-        # --------------------------------------------------------------
-        # PREDICTION + CONFIDENCE FIX
-        # --------------------------------------------------------------
         pred = int(dt_model.predict(scaled)[0])
 
-        # Some DecisionTree classifiers (especially with log-probability
-        # output) return *logits*.  `predict_proba` then gives huge numbers.
-        # → take `exp` → real probability → %.
+        # FIX: Confidence was >100% due to log-proba
         raw_proba = dt_model.predict_proba(scaled)[0]
-        proba = np.exp(raw_proba) / np.sum(np.exp(raw_proba))   # softmax
+        proba = np.exp(raw_proba) / np.sum(np.exp(raw_proba))
         confidence = proba.max() * 100
 
-        health_status = label_map.get(pred, "Unknown")
-
         return {
-            "plant_health_status": health_status,
+            "plant_health_status": label_map.get(pred, "Unknown"),
             "confidence": f"{confidence:.2f}%",
             "prediction_code": pred,
         }
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------------------------------------------------------
@@ -421,10 +393,9 @@ async def detect_image(file: UploadFile = File(...)):
         contents = await file.read()
         image = Image.open(io.BytesIO(contents))
         results = yolo_model(image, verbose=False)
-
         detections = []
         for r in results:
-            boxes = getattr(r, "boxes", None)
+            boxes = r.boxes
             if boxes is not None:
                 for box in boxes:
                     detections.append({
@@ -432,27 +403,18 @@ async def detect_image(file: UploadFile = File(...)):
                         "confidence": float(box.conf),
                         "bbox": box.xyxy.tolist()[0],
                     })
-
         return {"detections": detections, "total_detections": len(detections)}
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image detection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------------------------------------------------------
-# 3. VIDEO DETECTION + SERVE RESULT
+# 3. VIDEO DETECTION
 # ----------------------------------------------------------------------
 @app.post("/detect/video")
 async def detect_video(file: UploadFile = File(...)):
-    """
-    1. Save uploaded video to a temp folder
-    2. Run YOLO (save=True) → output .avi in runs/detect/<unique_id>/
-    3. Return the relative path that can be fetched via GET /video/...
-    """
     try:
         await load_models()
-
-        # ---- temporary input ------------------------------------------------
         temp_dir = "temp_video"
         os.makedirs(temp_dir, exist_ok=True)
         unique_id = str(uuid.uuid4())[:8]
@@ -461,7 +423,6 @@ async def detect_video(file: UploadFile = File(...)):
         with open(input_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # ---- YOLO processing ------------------------------------------------
         results = yolo_model.predict(
             source=input_path,
             save=True,
@@ -470,75 +431,49 @@ async def detect_video(file: UploadFile = File(...)):
             exist_ok=True,
         )
 
-        # YOLO saves as .avi (default)
         video_name = os.path.splitext(os.path.basename(input_path))[0] + ".avi"
-        output_video_path = os.path.join(
-            "runs/detect", f"predict_{unique_id}", video_name
-        )
+        output_path = os.path.join("runs/detect", f"predict_{unique_id}", video_name)
+        rel_path = os.path.relpath(output_path, os.getcwd())
 
-        # ---- cleanup temp input --------------------------------------------
+        # Cleanup
         try:
             os.remove(input_path)
-        except Exception:
+        except:
             pass
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-        # ---- relative path for the GET endpoint -----------------------------
-        rel_path = os.path.relpath(output_video_path, os.getcwd())
-
         return {
-            "message": "Video processed successfully",
+            "message": "Video processed",
             "output_video_path": rel_path,
-            "total_frames_processed": len(results),
+            "total_frames": len(results),
         }
-
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Video detection failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ----------------------------------------------------------------------
-# 4. SERVE PROCESSED VIDEO (static file)
+# 4. SERVE VIDEO
 # ----------------------------------------------------------------------
 @app.get("/video/{video_path:path}")
 async def get_video(video_path: str):
-    """
-    Serve the .avi created by /detect/video.
-    Render will treat the `runs/` folder as static files automatically.
-    """
     full_path = os.path.abspath(os.path.join(os.getcwd(), video_path))
-
     if not os.path.exists(full_path):
-        return JSONResponse(
-            {"error": f"Video not found: {full_path}"}, status_code=404
-        )
-
-    media_type = mimetypes.guess_type(full_path)[0] or "video/avi"
-    return FileResponse(
-        full_path,
-        media_type=media_type,
-        filename=os.path.basename(full_path),
-    )
+        return JSONResponse({"error": "Video not found"}, status_code=404)
+    return FileResponse(full_path, media_type="video/avi")
 
 
 # ----------------------------------------------------------------------
-# ROOT INFO
+# ROOT
 # ----------------------------------------------------------------------
 @app.get("/")
 async def root():
-    return {
-        "message": "Plant Disease Prediction API",
-        "endpoints": [
-            "POST /predict/health  – sensor data → health status",
-            "POST /detect/image    – upload image → YOLO detections",
-            "POST /detect/video    – upload video → processed .avi",
-            "GET  /video/{path}    – download processed video",
-        ],
-    }
+    return {"message": "API is running!", "endpoints": ["/predict/health", "/detect/image", "/detect/video"]}
 
 
 # ----------------------------------------------------------------------
-# ENTRYPOINT (Render uses `uvicorn main:app`)
+# RENDER ENTRYPOINT (Critical!)
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))          # Render injects $PORT
+    # Render sets $PORT
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
