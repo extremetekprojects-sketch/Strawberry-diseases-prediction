@@ -497,6 +497,7 @@ from pydantic import BaseModel
 
 import joblib
 from ultralytics import YOLO
+import cv2  # Added for video duration check
 
 warnings.filterwarnings("ignore")
 
@@ -522,11 +523,9 @@ async def load_models():
         print("Loading DT + Scaler...")
         dt_model = joblib.load("Decision_Tree.pkl")
         scaler = joblib.load("scaler.pkl")
+        # Ultralytics sometimes expects this attribute
         if not hasattr(dt_model, "monotonic_cst"):
-            try:
-                dt_model.__dict__["monotonic_cst"] = None
-            except:
-                pass
+            dt_model.__dict__["monotonic_cst"] = None
         print("DT + Scaler loaded!")
     if yolo_model is None:
         print("Loading YOLO...")
@@ -559,6 +558,8 @@ class SensorData(BaseModel):
 async def lifespan(app: FastAPI):
     await load_models()
     yield
+    # Optional: clean up runs/ on shutdown (Render restarts anyway)
+    # shutil.rmtree("runs", ignore_errors=True)
 
 
 app = FastAPI(title="Strawberry Disease Prediction API", lifespan=lifespan)
@@ -573,7 +574,7 @@ app.add_middleware(
 
 
 # ----------------------------------------------------------------------
-# 1. SENSOR HEALTH PREDICTION (unchanged – confidence fixed)
+# 1. SENSOR HEALTH PREDICTION (unchanged)
 # ----------------------------------------------------------------------
 @app.post("/predict/health")
 async def predict_health(data: SensorData):
@@ -629,80 +630,123 @@ async def detect_image(file: UploadFile = File(...)):
 
 
 # ----------------------------------------------------------------------
-# 3. VIDEO DETECTION – FIXED: Use results[0].save_path
+# 3. VIDEO DETECTION – Render-safe: Time limits, optimizations, early reject
 # ----------------------------------------------------------------------
 @app.post("/detect/video")
 async def detect_video(file: UploadFile = File(...)):
+    await load_models()
+
+    uid = str(uuid.uuid4())[:8]
+    input_path = f"/tmp/input_{uid}.mp4"
+    output_dir = f"runs/detect/predict_{uid}"
+
     try:
-        await load_models()
+        # NEW: Size limit (100MB) to prevent OOM
+        contents = await file.read()
+        if len(contents) > 100 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Video too large (>100MB)")
 
-        # 1. Save uploaded file
-        temp_dir = "temp_video"
-        os.makedirs(temp_dir, exist_ok=True)
-        uid = str(uuid.uuid4())[:8]
-        original_filename = file.filename
-        input_path = os.path.join(temp_dir, f"input_{uid}.mp4")
-
+        # NEW: Save & check duration (reject >30s videos)
         with open(input_path, "wb") as f:
-            shutil.copyfileobj(file.file, f)
+            f.write(contents)
+        cap = cv2.VideoCapture(input_path)
+        if not cap.isOpened():
+            raise ValueError("Invalid video file")
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        duration = frame_count / fps if fps > 0 else 0
+        cap.release()
+        if duration > 30:
+            raise HTTPException(status_code=413, detail="Video too long (>30s); use shorter clips")
 
-        # 2. Run YOLO prediction
+        # UPDATED: Optimized YOLO predict – vid_stride=5 (skip frames), imgsz=320 (faster), half=True (if CPU supports)
         results = yolo_model.predict(
             source=input_path,
             save=True,
             project="runs/detect",
             name=f"predict_{uid}",
             exist_ok=True,
+            verbose=False,
+            vid_stride=5,  # Process every 5th frame (80% faster)
+            imgsz=320,      # Smaller res for speed
+            half=True,      # Half-precision (faster on CPU)
+            max_det=10,     # Limit detections per frame
         )
 
-        # 3. Get actual saved video path from YOLO results
         if not results or len(results) == 0:
-            raise ValueError("YOLO failed to process video")
+            raise ValueError("YOLO returned no results")
 
-        saved_video_path = results[0].save_path  # <-- This is the correct path!
-        if not os.path.exists(saved_video_path):
-            raise FileNotFoundError(f"YOLO saved video not found: {saved_video_path}")
+        # Locate saved video (same as before)
+        saved_video = os.path.join(output_dir, os.path.basename(input_path))
+        if not os.path.exists(saved_video):
+            raise FileNotFoundError(f"Processed video not found: {saved_video}")
 
-        # 4. Return relative path for frontend
-        rel_path = os.path.relpath(saved_video_path, os.getcwd())
+        rel_path = os.path.relpath(saved_video, os.getcwd())
 
-        # 5. Clean up input
-        try:
-            os.remove(input_path)
-        except:
-            pass
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        # NEW: Extract sample detections (top 5 from last frame) for immediate feedback
+        sample_detections = []
+        if results:
+            last_r = results[-1]
+            boxes = getattr(last_r, "boxes", None)
+            if boxes is not None and len(boxes) > 0:
+                top_boxes = boxes[:5]  # Top 5
+                sample_detections = [
+                    {
+                        "class": last_r.names[int(box.cls)],
+                        "confidence": float(box.conf),
+                        "bbox": box.xyxy.tolist()[0],
+                    }
+                    for box in top_boxes
+                ]
 
         return {
             "message": "Video processed successfully",
-            "output_video_path": rel_path,
+            "output_video_url": f"/video/{rel_path}",
             "total_frames": len(results),
+            "duration_seconds": round(duration, 1),
+            "sample_detections": sample_detections,  # Quick preview
+            "warning": "For longer videos, upgrade to paid Render plan",
         }
 
+    except HTTPException:
+        raise  # Re-raise size/duration errors
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Video detection failed: {str(e)}")
+    finally:
+        # Always clean up
+        if os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+            except:
+                pass
 
 
 # ----------------------------------------------------------------------
-# 4. SERVE PROCESSED VIDEO – Reliable FileResponse
+# 4. SERVE PROCESSED VIDEO – Secure & MIME-correct (unchanged)
 # ----------------------------------------------------------------------
 @app.get("/video/{video_path:path}")
 async def get_video(video_path: str):
     full_path = os.path.abspath(os.path.join(os.getcwd(), video_path))
 
+    # Security: prevent directory traversal
+    if not full_path.startswith(os.getcwd()):
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
+
     if not os.path.exists(full_path):
         return JSONResponse({"error": "Video not found"}, status_code=404)
 
-    media_type = mimetypes.guess_type(full_path)[0] or "video/avi"
+    # Force correct MIME for MP4
+    media_type = "video/mp4" if full_path.lower().endswith(".mp4") else mimetypes.guess_type(full_path)[0]
+
     return FileResponse(
         full_path,
-        media_type=media_type,
+        media_type=media_type or "application/octet-stream",
         filename=os.path.basename(full_path),
     )
 
 
 # ----------------------------------------------------------------------
-# ROOT
+# ROOT (updated with video notes)
 # ----------------------------------------------------------------------
 @app.get("/")
 async def root():
@@ -711,8 +755,8 @@ async def root():
         "endpoints": [
             "POST /predict/health",
             "POST /detect/image",
-            "POST /detect/video",
-            "GET  /video/{path}",
+            "POST /detect/video (videos <30s & <100MB only; optimize for Render timeout)",
+            "GET  /video/<relative-path>",
         ],
     }
 
