@@ -522,7 +522,6 @@ async def load_models():
         print("Loading DT + Scaler...")
         dt_model = joblib.load("Decision_Tree.pkl")
         scaler = joblib.load("scaler.pkl")
-        # scikit-learn 1.6+ compatibility
         if not hasattr(dt_model, "monotonic_cst"):
             try:
                 dt_model.__dict__["monotonic_cst"] = None
@@ -589,7 +588,6 @@ async def predict_health(data: SensorData):
         scaled = scaler.transform(features)
         pred = int(dt_model.predict(scaled)[0])
 
-        # Fix >100% confidence (log-proba → softmax)
         raw = dt_model.predict_proba(scaled)[0]
         proba = np.exp(raw) / np.sum(np.exp(raw))
         confidence = proba.max() * 100
@@ -631,23 +629,24 @@ async def detect_image(file: UploadFile = File(...)):
 
 
 # ----------------------------------------------------------------------
-# 3. VIDEO DETECTION – FIXED (no 502)
+# 3. VIDEO DETECTION – FIXED: Use results[0].save_path
 # ----------------------------------------------------------------------
 @app.post("/detect/video")
 async def detect_video(file: UploadFile = File(...)):
     try:
         await load_models()
 
-        # ---- 1. Save uploaded file
+        # 1. Save uploaded file
         temp_dir = "temp_video"
         os.makedirs(temp_dir, exist_ok=True)
         uid = str(uuid.uuid4())[:8]
+        original_filename = file.filename
         input_path = os.path.join(temp_dir, f"input_{uid}.mp4")
 
         with open(input_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
 
-        # ---- 2. Run YOLO (saves .avi automatically)
+        # 2. Run YOLO prediction
         results = yolo_model.predict(
             source=input_path,
             save=True,
@@ -656,12 +655,18 @@ async def detect_video(file: UploadFile = File(...)):
             exist_ok=True,
         )
 
-        # ---- 3. Build output path
-        base_name = os.path.splitext(os.path.basename(input_path))[0]
-        output_path = os.path.join("runs/detect", f"predict_{uid}", f"{base_name}.avi")
-        rel_path = os.path.relpath(output_path, os.getcwd())   # for GET endpoint
+        # 3. Get actual saved video path from YOLO results
+        if not results or len(results) == 0:
+            raise ValueError("YOLO failed to process video")
 
-        # ---- 4. Clean up input
+        saved_video_path = results[0].save_path  # <-- This is the correct path!
+        if not os.path.exists(saved_video_path):
+            raise FileNotFoundError(f"YOLO saved video not found: {saved_video_path}")
+
+        # 4. Return relative path for frontend
+        rel_path = os.path.relpath(saved_video_path, os.getcwd())
+
+        # 5. Clean up input
         try:
             os.remove(input_path)
         except:
@@ -675,12 +680,11 @@ async def detect_video(file: UploadFile = File(...)):
         }
 
     except Exception as e:
-        # Return JSON error – never let exception bubble to 502
         raise HTTPException(status_code=500, detail=f"Video detection failed: {str(e)}")
 
 
 # ----------------------------------------------------------------------
-# 4. SERVE PROCESSED VIDEO – SIMPLE & RELIABLE
+# 4. SERVE PROCESSED VIDEO – Reliable FileResponse
 # ----------------------------------------------------------------------
 @app.get("/video/{video_path:path}")
 async def get_video(video_path: str):
@@ -714,7 +718,7 @@ async def root():
 
 
 # ----------------------------------------------------------------------
-# RENDER ENTRYPOINT (MUST USE $PORT)
+# RENDER ENTRYPOINT
 # ----------------------------------------------------------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
